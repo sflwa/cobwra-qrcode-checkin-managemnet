@@ -1,8 +1,8 @@
 <?php
 /**
- * COBWRA Engine - Professional Normalization (v33.0)
- * Fix: Refactored Strict Lookup to prevent false 'VACANCY' triggers.
- * Fix: Corrected SQL join for Form 2 vs Form 4 field mapping.
+ * COBWRA Engine - Professional Normalization (v34.0)
+ * Fix: Prioritized Community/Name string matching OVER Numeric IDs.
+ * Logic: Strict String (Comm + Last) -> Strict Guest (Org + Last) -> RSVP ID Fallback.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -12,33 +12,35 @@ class COBWRA_Engine {
 	public $alias_opt = 'cobwra_name_aliases';
 	private $guest_master_form_id = 4;
 
-	public function analyze_scan( $primary_id, $last_name = '' ) {
+	public function analyze_scan( $comm_or_id, $last_name = '' ) {
 		global $wpdb;
-		$input_id = sanitize_text_field( str_replace( array( '&amp;', 'amp;' ), '', $primary_id ) );
+		
+		$comm_input = sanitize_text_field( $comm_or_id );
+		$last_input = sanitize_text_field( $last_name );
 
-		// 1. PRIMARY: Numeric ID Match (Badge ID or direct Entry ID)
-		if ( is_numeric( $input_id ) ) {
-			$master = $this->check_roster_by_id( COBWRA_MASTER_FORM, $input_id );
+		// 1. PRIMARY: Strict Master Roster Match (Community + Last Name)
+		// This is for Master Directory QR codes (?c=Banyan%20Springs&l=Turner)
+		if ( ! empty( $comm_input ) && ! empty( $last_input ) ) {
+			$master = $this->lookup_roster_strict( COBWRA_MASTER_FORM, '3', $comm_input, $last_input );
 			if ( $master ) return $master;
 
-			$guest = $this->check_roster_by_id( $this->guest_master_form_id, $input_id );
+			// 2. SECONDARY: Strict Guest Master Match (Org + Last Name)
+			$guest = $this->lookup_roster_strict( $this->guest_master_form_id, '6', $comm_input, $last_input );
 			if ( $guest ) return $guest;
 		}
 
-		// 2. SECONDARY: Strict String Match (Community + Last Name)
-		// This is the logic for ?c=Community&l=LastName
-		if ( ! empty( $last_name ) ) {
-			$strict_master = $this->lookup_roster_strict( COBWRA_MASTER_FORM, $input_id, $last_name );
-			if ( $strict_master ) return $strict_master;
-
-			$strict_guest = $this->lookup_roster_strict( $this->guest_master_form_id, $input_id, $last_name );
-			if ( $strict_guest ) return $strict_guest;
-		}
-
-		// 3. TERTIARY: RSVP Fallback (Discrepancy Tracker)
-		$csv_data = get_option( $this->csv_opt, array() );
-		if ( isset( $csv_data[$input_id] ) ) {
-			return $this->identify_discrepancy( $csv_data[$input_id] );
+		// 3. TERTIARY: RSVP/ID Fallback (The numeric safety net)
+		// Used only if the string match fails or if ONLY an ID was passed.
+		$lookup_id = is_numeric( $comm_input ) ? $comm_input : '';
+		if ( ! empty( $lookup_id ) ) {
+			$csv_data = get_option( $this->csv_opt, array() );
+			if ( isset( $csv_data[$lookup_id] ) ) {
+				return $this->identify_discrepancy( $csv_data[$lookup_id] );
+			}
+			
+			// Check if the ID itself belongs to a Master/Guest record directly
+			$direct_master = $this->check_roster_by_id( COBWRA_MASTER_FORM, $lookup_id );
+			if ( $direct_master ) return $direct_master;
 		}
 
 		return array( 
@@ -48,11 +50,10 @@ class COBWRA_Engine {
 		);
 	}
 
-	private function lookup_roster_strict( $form_id, $comm_val, $last_val ) {
+	private function lookup_roster_strict( $form_id, $comm_key, $comm_val, $last_val ) {
 		global $wpdb;
-		$comm_key = ( $form_id == $this->guest_master_form_id ) ? '6' : '3';
 
-		// Refactored Join: Finds entry_id where BOTH community and last name match exactly
+		// Use INNER JOIN to find an entry that satisfies BOTH conditions
 		$entry_id = $wpdb->get_var( $wpdb->prepare( "
 			SELECT m1.entry_id 
 			FROM {$wpdb->prefix}gf_entry_meta m1
@@ -108,7 +109,7 @@ class COBWRA_Engine {
 		return array( 
 			'status' => 'VACANCY', 'color' => '#3498db', 'flag' => 1, 
 			'name' => $rsvp['first'] . ' ' . $rsvp['last'], 'comm' => $rsvp['comm'], 
-			'role' => $rsvp['role'], 'note' => 'Claims official role; verifying position.' 
+			'role' => $rsvp['role'], 'note' => 'Claims official role; verify seat in Master Roster.' 
 		);
 	}
 }
