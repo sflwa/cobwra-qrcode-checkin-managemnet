@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: COBWRA Meeting Manager
- * Description: Staging Table Architecture - High Performance Check-in (v48.3)
+ * Description: Staging Table Architecture - High Performance Check-in (v48.6)
  * Author: Philip Levine / SFLWA Coding
- * Version: 48.3
+ * Version: 48.6
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -16,6 +16,7 @@ require_once COBWRA_PATH . 'includes/class-cobwra-database.php';
 require_once COBWRA_PATH . 'includes/class-cobwra-engine.php';
 require_once COBWRA_PATH . 'includes/class-cobwra-admin.php';
 require_once COBWRA_PATH . 'includes/class-cobwra-kiosk.php';
+require_once COBWRA_PATH . 'includes/class-cobwra-dashboard.php';
 
 /**
  * Plugin Activation Hook
@@ -43,6 +44,9 @@ class COBWRA_Core {
 
         // 3. Initialize Admin components
         new COBWRA_Admin();
+
+        // 4. Initialize Frontend Dashboard
+        new COBWRA_Dashboard();
     }
 }
 
