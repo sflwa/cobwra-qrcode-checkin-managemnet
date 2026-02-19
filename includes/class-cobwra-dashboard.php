@@ -10,8 +10,8 @@ class COBWRA_Dashboard {
 
 	public function __construct( $engine ) {
 		$this->engine = $engine;
-		add_action( 'admin_init', [ $this, 'handle_actions' ] );
-		add_shortcode( 'cobwra_dashboard', [ $this, 'render_dashboard' ] );
+		add_action( 'admin_init', array( $this, 'handle_actions' ) );
+		add_shortcode( 'cobwra_dashboard', array( $this, 'render_dashboard' ) );
 	}
 
 	public function handle_actions() {
@@ -45,7 +45,7 @@ class COBWRA_Dashboard {
 
 		ob_start(); ?>
 		<style>
-			.cobwra-dash { font-family: sans-serif; background:#f4f4f4; padding:20px; }
+			.cobwra-dash { font-family: sans-serif; background:#f4f4f4; padding:20px; border-radius:10px; }
 			.hero { padding:30px; text-align:center; border-radius:10px; color:white; margin-bottom:20px; }
 			.stat-bar { display: flex; gap: 15px; margin-bottom: 25px; }
 			.stat-item { flex: 1; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; text-align: center; }
@@ -56,14 +56,14 @@ class COBWRA_Dashboard {
 		<div class="cobwra-dash">
 			<div class="hero" style="background:<?php echo (count($checked_in_reps) >= $quorum_target && $quorum_target > 0) ? '#27ae60' : '#c0392b'; ?>;">
 				<h1 style="margin:0; font-size:3.5em;"><?php echo count($checked_in_reps); ?> / <?php echo $quorum_target; ?> Communities</h1>
-				<p>Official Quorum (40% of <?php echo $total_active; ?> Approved Communities)</p>
+				<p style="margin:5px 0 0; font-size:1.3em; opacity:0.9;">Official Quorum (40% of <?php echo $total_active; ?> Approved Communities)</p>
 			</div>
 
 			<div class="stat-bar">
 				<div class="stat-item"><h4>Official Reps</h4><strong><?php echo count($checked_in_reps); ?></strong></div>
 				<div class="stat-item"><h4>Announced Guest</h4><strong><?php echo $announced_count; ?></strong></div>
 				<div class="stat-item"><h4>General Public</h4><strong><?php echo $public_count; ?></strong></div>
-				<div class="stat-item"><h4>Total Scanned</h4><strong><?php echo count($scans); ?></strong></div>
+				<div class="stat-item"><h4>Total Scans</h4><strong><?php echo count($scans); ?></strong></div>
 			</div>
 
 			<h3 class="section-label" style="background:#27ae60;">Official Attendance</h3>
@@ -73,20 +73,21 @@ class COBWRA_Dashboard {
 			<div class="grid-box"><?php $i=1; foreach($missing as $m) { echo "<div>{$i}. {$m}</div>"; $i++; } ?></div>
 
 			<h3 class="section-label" style="background:#2c3e50;">Action Item Log</h3>
-			<div style="background:#fff; padding:20px; border:1px solid #ddd; border-top:none;">
+			<div style="background:#fff; padding:20px; border:1px solid #ddd; border-top:none; border-radius: 0 0 8px 8px;">
 				<form method="POST" style="margin-bottom:15px; text-align:right;">
 					<?php wp_nonce_field('cobwra_dashboard_action', 'cobwra_dashboard_nonce'); ?>
 					<input type="submit" name="cobwra_export" value="Download Discrepancy CSV" class="button button-secondary">
-					<input type="submit" name="cobwra_sync" value="Sync Official Reps" class="button button-primary">
+					<input type="submit" name="cobwra_sync" value="Sync Unique Reps" class="button button-primary">
 				</form>
 				<table class="wp-list-table widefat fixed striped">
 					<thead><tr><th>Attendee</th><th>Status</th><th>Note</th></tr></thead>
 					<tbody>
 						<?php foreach(['CONFLICT', 'VACANCY', 'ROLE MISMATCH', 'ANNOUNCED'] as $k) {
 							foreach($groups[$k] as $res) {
-								echo "<tr><td><strong>{$res['name']}</strong><br><small>{$res['comm']}</small></td><td><span style='background:{$res['color']}; color:white; padding:4px 8px; border-radius:4px; font-size:0.8em; font-weight:bold;'>{$res['status']}</span></td><td>{$res['note']}</td></tr>";
+								echo "<tr><td><strong>{$res['name']}</strong><br><small>{$res['comm']}</small></td><td><span style='background:{$res['color']}; color:white; padding:4px 8px; border-radius:4px; font-size:0.8em; font-weight:bold; text-transform:uppercase;'>{$res['status']}</span></td><td>{$res['note']}</td></tr>";
 							}
 						} ?>
+						<tr style="background:#f9f9f9;"><td colspan="3" style="text-align:center; color:#888;">Matches and <?php echo $public_count; ?> Public scans hidden.</td></tr>
 					</tbody>
 				</table>
 			</div>
