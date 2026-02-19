@@ -1,139 +1,101 @@
 <?php
 /**
- * COBWRA Engine - Professional Normalization (v36.0)
- * Fix: Universal Log Path and Strict Search Debugging.
+ * class-cobwra-engine.php
+ * Unified Roster Engine - Live Validation (v48.3)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class COBWRA_Engine {
-	public $csv_opt   = 'cobwra_rsvp_lookup_data';
-	public $alias_opt = 'cobwra_name_aliases';
-	private $guest_master_form_id = 4;
-	private $log_file;
+    private $table_name;
 
-	public function __construct() {
-		// Use WP_CONTENT_DIR to avoid permission issues within plugin folders
-		$this->log_file = WP_CONTENT_DIR . '/debug_cobwra.log';
-	}
+    public function __construct() {
+        global $wpdb;
+        $this->table_name = $wpdb->prefix . 'cobwra_meeting_roster';
+    }
 
-	private function log_event( $message ) {
-		$timestamp = current_time( 'mysql' );
-		$entry = "[{$timestamp}] {$message}\n";
-		// Force append or create
-		error_log( $entry, 3, $this->log_file );
-	}
+    /**
+     * Primary Check-in Validation Logic
+     */
+    public function analyze_scan( $comm_or_id, $last_name = '' ) {
+        global $wpdb;
 
-	public function analyze_scan( $comm_or_id, $last_name = '' ) {
-		global $wpdb;
-		
-		$comm_input = sanitize_text_field( $comm_or_id );
-		$last_input = sanitize_text_field( $last_name );
-		
-		$this->log_event( "--- NEW SCAN ATTEMPT ---" );
-		$this->log_event( "Input Received -> C: '{$comm_input}' | L: '{$last_input}'" );
+        // 1. Determine if we are searching by RSVP ID or Name/Community
+        if ( is_numeric( $comm_or_id ) ) {
+            $match = $wpdb->get_row( $wpdb->prepare( 
+                "SELECT * FROM $this->table_name WHERE rsvp_id = %s", $comm_or_id 
+            ) );
+        } else {
+            $match = $wpdb->get_row( $wpdb->prepare( 
+                "SELECT * FROM $this->table_name WHERE community_name = %s AND last_name = %s", 
+                $comm_or_id, $last_name 
+            ) );
+        }
 
-		// 1. STEP: Strict Master Roster Match (Form 2)
-		if ( ! empty( $comm_input ) && ! empty( $last_input ) ) {
-			$this->log_event( "Searching Master (Form 2) for Exact Pair..." );
-			$master = $this->lookup_roster_strict( COBWRA_MASTER_FORM, '3', $comm_input, $last_input );
-			if ( $master ) {
-				$this->log_event( "SUCCESS: Found Master Rep: " . $master['name'] );
-				return $master;
-			}
+        // 2. Evaluate the match found in the Roster
+        if ( $match ) {
+            return $this->process_roster_match( $match );
+        }
 
-			// 2. STEP: Strict Guest Master Match (Form 4)
-			$this->log_event( "Searching Guest Master (Form 4) for Exact Pair..." );
-			$guest = $this->lookup_roster_strict( $this->guest_master_form_id, '6', $comm_input, $last_input );
-			if ( $guest ) {
-				$this->log_event( "SUCCESS: Found Announced Guest: " . $guest['name'] );
-				return $guest;
-			}
-		}
+        // 3. Fallback for Walk-ins
+        return array(
+            'status' => 'WALK-IN',
+            'color'  => '#95a5a6',
+            'name'   => $last_name ?: 'Unknown',
+            'comm'   => $comm_or_id,
+            'role'   => 'Guest',
+            'note'   => 'No record found in Meeting Roster.'
+        );
+    }
 
-		// 3. STEP: RSVP ID Fallback
-		if ( is_numeric( $comm_input ) ) {
-			$this->log_event( "Numeric ID detected, checking RSVP Cache for ID: " . $comm_input );
-			$csv_data = get_option( $this->csv_opt, array() );
-			if ( isset( $csv_data[$comm_input] ) ) {
-				$this->log_event( "SUCCESS: Found ID in RSVP Cache." );
-				return $this->identify_discrepancy( $csv_data[$comm_input] );
-			}
-		}
+    /**
+     * Determine Status: Matched Rep, Guest, or Conflict
+     */
+    private function process_staged_match( $m ) {
+        $status = 'MATCHED';
+        $color  = '#27ae60'; 
 
-		$this->log_event( "FAILURE: No match found. Returning WALK-IN." );
-		return array( 
-			'status' => 'WALK-IN', 'color' => '#636e72', 'flag' => 2, 
-			'name' => 'Unknown', 'comm' => 'N/A', 'role' => 'Guest', 
-			'note' => 'ID/Name not recognized.' 
-		);
-	}
+        if ( (int)$m->is_announced === 1 ) {
+            $status = 'ANNOUNCED GUEST';
+            $color  = '#8e44ad';
+        } elseif ( ! empty( $m->conflict_flag ) ) {
+            // Vacancy/Conflict identified during the prep/import phase
+            $status = strtoupper( $m->conflict_flag );
+            $color  = ( $status === 'VACANCY' ) ? '#e67e22' : '#d35400';
+        }
 
-	private function lookup_roster_strict( $form_id, $comm_key, $comm_val, $last_val ) {
-		global $wpdb;
-		$sql = $wpdb->prepare( "
-			SELECT m1.entry_id 
-			FROM {$wpdb->prefix}gf_entry_meta m1
-			JOIN {$wpdb->prefix}gf_entry_meta m2 ON m1.entry_id = m2.entry_id
-			WHERE m1.form_id = %d 
-			AND (m1.meta_key = %s AND m1.meta_value = %s)
-			AND (m2.meta_key = '1.6' AND m2.meta_value = %s)
-			LIMIT 1",
-			$form_id, $comm_key, $comm_val, $last_val
-		);
-		
-		$this->log_event( "SQL Query: " . $sql );
-		$entry_id = $wpdb->get_var( $sql );
-		
-		if ( $entry_id ) {
-			$this->log_event( "Database found Entry ID: " . $entry_id );
-			return $this->check_roster_by_id( $form_id, $entry_id );
-		}
-		return false;
-	}
+        return array(
+            'status' => $status,
+            'color'  => $color,
+            'name'   => "{$m->first_name} {$m->last_name}",
+            'comm'   => $m->community_name,
+            'role'   => ( $m->official_role !== 'None' ) ? $m->official_role : $m->rsvp_role,
+            'note'   => $m->conflict_flag ?: 'Record Verified.'
+        );
+    }
 
-	public function check_roster_by_id( $form_id, $eid ) {
-		global $wpdb;
-		$is_guest = ( $form_id == $this->guest_master_form_id );
-		$comm_field = $is_guest ? '6' : '3';
-		$role_field = $is_guest ? '5' : '2';
-
-		$data = $wpdb->get_row( $wpdb->prepare( "
-			SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f,
-				   MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l,
-				   MAX(CASE WHEN meta_key = %s THEN meta_value END) as c,
-				   MAX(CASE WHEN meta_key = %s THEN meta_value END) as r
-			FROM {$wpdb->prefix}gf_entry_meta WHERE entry_id = %d GROUP BY entry_id", 
-			$comm_field, $role_field, $eid 
-		) );
-
-		if ( $data && ! empty( $data->f ) ) {
-			return array(
-				'status' => $is_guest ? 'ANNOUNCED' : 'MATCHED',
-				'color'  => $is_guest ? '#8e44ad' : '#27ae60',
-				'flag'   => 0,
-				'name'   => trim( "$data->f $data->l" ),
-				'comm'   => $data->c,
-				'role'   => $data->r,
-				'note'   => $is_guest ? 'Confirmed Guest' : 'Official Representative'
-			);
-		}
-		return false;
-	}
-
-	public function log_scan( $res, $id ) {
-		global $wpdb;
-		$wpdb->insert( "{$wpdb->prefix}gf_entry", array( 'form_id' => COBWRA_TEMP_FORM, 'date_created' => current_time( 'mysql' ), 'status' => 'active' ) );
-		$eid = $wpdb->insert_id;
-		$meta = array( '1' => $res['comm'], '3' => "{$res['name']} ({$res['role']})", '5' => $res['flag'], '6' => $id );
-		foreach ( $meta as $k => $v ) { $wpdb->insert( "{$wpdb->prefix}gf_entry_meta", array( 'entry_id' => $eid, 'form_id' => COBWRA_TEMP_FORM, 'meta_key' => (string) $k, 'meta_value' => $v ) ); }
-	}
-
-	private function identify_discrepancy( $rsvp ) {
-		return array( 
-			'status' => 'VACANCY', 'color' => '#3498db', 'flag' => 1, 
-			'name' => $rsvp['first'] . ' ' . $rsvp['last'], 'comm' => $rsvp['comm'], 
-			'role' => $rsvp['role'], 'note' => 'Claims official role; verify seat in Master Roster.' 
-		);
-	}
+    /**
+     * Logs the attendance to Form 10
+     */
+    public function log_scan( $res, $scan_id ) {
+        global $wpdb;
+        $wpdb->insert( "{$wpdb->prefix}gf_entry", array( 
+            'form_id' => 10, 'date_created' => current_time('mysql'), 'status' => 'active' 
+        ) );
+        $eid = $wpdb->insert_id;
+        
+        $meta = array( 
+            '1' => $res['comm'], 
+            '3' => "{$res['name']} ({$res['role']})", 
+            '4' => current_time('Y-m-d'), 
+            '5' => $res['status'], 
+            '6' => $scan_id 
+        );
+        
+        foreach ( $meta as $k => $v ) {
+            $wpdb->insert( "{$wpdb->prefix}gf_entry_meta", array( 
+                'entry_id' => $eid, 'form_id' => 10, 'meta_key' => (string)$k, 'meta_value' => $v 
+            ) );
+        }
+    }
 }
