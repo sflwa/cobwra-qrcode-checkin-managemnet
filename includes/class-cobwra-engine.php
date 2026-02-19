@@ -1,8 +1,7 @@
 <?php
 /**
- * COBWRA Engine - Professional Normalization (v34.0)
- * Fix: Prioritized Community/Name string matching OVER Numeric IDs.
- * Logic: Strict String (Comm + Last) -> Strict Guest (Org + Last) -> RSVP ID Fallback.
+ * COBWRA Engine - Professional Normalization (v35.0)
+ * Logic: Strict Matching with Persistent File Logging.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -11,50 +10,74 @@ class COBWRA_Engine {
 	public $csv_opt   = 'cobwra_rsvp_lookup_data';
 	public $alias_opt = 'cobwra_name_aliases';
 	private $guest_master_form_id = 4;
+	private $log_file;
+
+	public function __construct() {
+		// Define log path: wp-content/plugins/your-plugin/includes/cobwra_debug.log
+		$this->log_file = plugin_dir_path( __FILE__ ) . 'cobwra_debug.log';
+	}
+
+	/**
+	 * Custom Logger
+	 */
+	private function log_event( $message ) {
+		$timestamp = current_time( 'mysql' );
+		$entry = "[{$timestamp}] {$message}\n";
+		file_put_contents( $this->log_file, $entry, FILE_APPEND );
+	}
 
 	public function analyze_scan( $comm_or_id, $last_name = '' ) {
 		global $wpdb;
 		
 		$comm_input = sanitize_text_field( $comm_or_id );
 		$last_input = sanitize_text_field( $last_name );
+		
+		$this->log_event( "--- NEW SCAN DETECTED ---" );
+		$this->log_event( "Input Params: Community/ID: '{$comm_input}', Last Name: '{$last_input}'" );
 
-		// 1. PRIMARY: Strict Master Roster Match (Community + Last Name)
-		// This is for Master Directory QR codes (?c=Banyan%20Springs&l=Turner)
+		// 1. STEP: Strict Master Roster Match (Form 2)
 		if ( ! empty( $comm_input ) && ! empty( $last_input ) ) {
+			$this->log_event( "Step 1: Attempting Strict Master Match (Form 2) for {$comm_input} | {$last_input}" );
 			$master = $this->lookup_roster_strict( COBWRA_MASTER_FORM, '3', $comm_input, $last_input );
-			if ( $master ) return $master;
+			if ( $master ) {
+				$this->log_event( "Result: SUCCESS - Match found in Master Roster." );
+				return $master;
+			}
+			$this->log_event( "Result: No Match in Master Roster." );
 
-			// 2. SECONDARY: Strict Guest Master Match (Org + Last Name)
+			// 2. STEP: Strict Guest Master Match (Form 4)
+			$this->log_event( "Step 2: Attempting Strict Guest Match (Form 4) for {$comm_input} | {$last_input}" );
 			$guest = $this->lookup_roster_strict( $this->guest_master_form_id, '6', $comm_input, $last_input );
-			if ( $guest ) return $guest;
+			if ( $guest ) {
+				$this->log_event( "Result: SUCCESS - Match found in Guest Master." );
+				return $guest;
+			}
+			$this->log_event( "Result: No Match in Guest Master." );
 		}
 
-		// 3. TERTIARY: RSVP/ID Fallback (The numeric safety net)
-		// Used only if the string match fails or if ONLY an ID was passed.
+		// 3. STEP: RSVP/ID Fallback
 		$lookup_id = is_numeric( $comm_input ) ? $comm_input : '';
 		if ( ! empty( $lookup_id ) ) {
+			$this->log_event( "Step 3: Attempting RSVP ID Fallback for ID: {$lookup_id}" );
 			$csv_data = get_option( $this->csv_opt, array() );
 			if ( isset( $csv_data[$lookup_id] ) ) {
+				$this->log_event( "Result: Match found in RSVP CSV Cache." );
 				return $this->identify_discrepancy( $csv_data[$lookup_id] );
 			}
-			
-			// Check if the ID itself belongs to a Master/Guest record directly
-			$direct_master = $this->check_roster_by_id( COBWRA_MASTER_FORM, $lookup_id );
-			if ( $direct_master ) return $direct_master;
+			$this->log_event( "Result: No Match in RSVP Cache." );
 		}
 
+		$this->log_event( "Final Status: WALK-IN (No records found)" );
 		return array( 
 			'status' => 'WALK-IN', 'color' => '#636e72', 'flag' => 2, 
 			'name' => 'Unknown', 'comm' => 'N/A', 'role' => 'Guest', 
-			'note' => 'Not recognized in Master, Guest, or RSVP.' 
+			'note' => 'Not recognized.' 
 		);
 	}
 
 	private function lookup_roster_strict( $form_id, $comm_key, $comm_val, $last_val ) {
 		global $wpdb;
-
-		// Use INNER JOIN to find an entry that satisfies BOTH conditions
-		$entry_id = $wpdb->get_var( $wpdb->prepare( "
+		$sql = $wpdb->prepare( "
 			SELECT m1.entry_id 
 			FROM {$wpdb->prefix}gf_entry_meta m1
 			JOIN {$wpdb->prefix}gf_entry_meta m2 ON m1.entry_id = m2.entry_id
@@ -63,12 +86,20 @@ class COBWRA_Engine {
 			AND (m2.meta_key = '1.6' AND m2.meta_value = %s)
 			LIMIT 1",
 			$form_id, $comm_key, $comm_val, $last_val
-		) );
-
-		return $entry_id ? $this->check_roster_by_id( $form_id, $entry_id ) : false;
+		);
+		
+		$this->log_event( "Running SQL: " . $sql );
+		$entry_id = $wpdb->get_var( $sql );
+		
+		if ( $entry_id ) {
+			$this->log_event( "SQL found Entry ID: " . $entry_id );
+			return $this->check_roster_by_id( $form_id, $entry_id );
+		}
+		return false;
 	}
 
-	private function check_roster_by_id( $form_id, $eid ) {
+    // ... (rest of helper methods check_roster_by_id and log_scan remain unchanged) ...
+    private function check_roster_by_id( $form_id, $eid ) {
 		global $wpdb;
 		$is_guest = ( $form_id == $this->guest_master_form_id );
 		$comm_field = $is_guest ? '6' : '3';
