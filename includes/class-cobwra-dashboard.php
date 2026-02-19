@@ -1,6 +1,7 @@
 <?php
 /**
- * COBWRA Dashboard - Visual Intelligence (v22.0)
+ * COBWRA Dashboard - Visual Intelligence (v23.0)
+ * Fix: CSV Export "Jump" bug.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -10,14 +11,28 @@ class COBWRA_Dashboard {
 
 	public function __construct( $engine ) {
 		$this->engine = $engine;
-		add_action( 'admin_init', array( $this, 'handle_actions' ) );
+		// Use priority 1 to catch the export before any HTML is rendered
+		add_action( 'admin_init', array( $this, 'handle_actions' ), 1 );
 		add_shortcode( 'cobwra_dashboard', array( $this, 'render_dashboard' ) );
 	}
 
 	public function handle_actions() {
 		if ( ! current_user_can('manage_options') ) return;
-		if ( isset($_POST['cobwra_export']) ) $this->export_csv();
-		if ( isset($_POST['cobwra_sync']) ) $this->sync_form_6();
+
+		// 1. Handle CSV Export (CRITICAL: Must happen before any output)
+		if ( isset( $_POST['cobwra_export'] ) ) {
+			// Check nonce manually for early exit
+			if ( ! isset( $_POST['cobwra_dashboard_nonce'] ) || ! wp_verify_nonce( $_POST['cobwra_dashboard_nonce'], 'cobwra_dashboard_action' ) ) {
+				return;
+			}
+			$this->export_csv();
+		}
+
+		// 2. Handle Sync
+		if ( isset( $_POST['cobwra_sync'] ) ) {
+			check_admin_referer('cobwra_dashboard_action', 'cobwra_dashboard_nonce');
+			$this->sync_form_6();
+		}
 	}
 
 	public function render_dashboard() {
@@ -69,7 +84,7 @@ class COBWRA_Dashboard {
 			<h3 class="section-label" style="background:#27ae60;">Official Attendance</h3>
 			<div class="grid-box"><?php $i=1; foreach($checked_in_reps as $c) { echo "<div>{$i}. {$c}</div>"; $i++; } ?></div>
 
-			<h3 class="section-label" style="background:#c0392b;">Missing Communities</h3>
+			<h3 class="section-label" style="background:#c0392b;">Communities Not in Attendance</h3>
 			<div class="grid-box"><?php $i=1; foreach($missing as $m) { echo "<div>{$i}. {$m}</div>"; $i++; } ?></div>
 
 			<h3 class="section-label" style="background:#2c3e50;">Action Item Log</h3>
@@ -84,7 +99,7 @@ class COBWRA_Dashboard {
 					<tbody>
 						<?php foreach(['CONFLICT', 'VACANCY', 'ROLE MISMATCH', 'ANNOUNCED'] as $k) {
 							foreach($groups[$k] as $res) {
-								echo "<tr><td><strong>{$res['name']}</strong><br><small>{$res['comm']}</small></td><td><span style='background:{$res['color']}; color:white; padding:4px 8px; border-radius:4px; font-size:0.8em; font-weight:bold; text-transform:uppercase;'>{$res['status']}</span></td><td>{$res['note']}</td></tr>";
+								echo "<tr><td><strong>" . esc_html($res['name']) . "</strong><br><small>" . esc_html($res['comm']) . "</small></td><td><span style='background:{$res['color']}; color:white; padding:4px 8px; border-radius:4px; font-size:0.8em; font-weight:bold; text-transform:uppercase;'>" . esc_html($res['status']) . "</span></td><td>" . $res['note'] . "</td></tr>";
 							}
 						} ?>
 						<tr style="background:#f9f9f9;"><td colspan="3" style="text-align:center; color:#888;">Matches and <?php echo $public_count; ?> Public scans hidden.</td></tr>
@@ -97,18 +112,35 @@ class COBWRA_Dashboard {
 
 	private function export_csv() {
 		global $wpdb;
+		
+		// Clean the buffer to prevent WP headers from corrupting CSV
+		if (ob_get_level()) ob_end_clean();
+
 		$scans = $wpdb->get_results( $wpdb->prepare( "SELECT m.meta_value as rsvp_id FROM {$wpdb->prefix}gf_entry_meta m JOIN {$wpdb->prefix}gf_entry e ON m.entry_id = e.id WHERE e.form_id = %d AND m.meta_key = '6' AND e.status = 'active'", COBWRA_TEMP_FORM ) );
-		header('Content-Type: text/csv');
+
+		header('Content-Type: text/csv; charset=utf-8');
 		header('Content-Disposition: attachment; filename=cobwra-discrepancies-'.date('Y-m-d').'.csv');
+		header('Pragma: no-cache');
+		header('Expires: 0');
+
 		$o = fopen('php://output', 'w');
 		fputcsv($o, ['Status', 'Name', 'Community', 'Email', 'Role', 'Observation']);
+		
 		foreach($scans as $s) {
 			$res = $this->engine->analyze_scan($s->rsvp_id);
 			if($res['status'] !== 'MATCHED' && $res['status'] !== 'GUEST/PUBLIC' && $res['status'] !== 'WALK-IN') {
-				fputcsv($o, [$res['status'], $res['name'], $res['comm'], $res['email'], $res['role'], strip_tags($res['note'])]);
+				fputcsv($o, [
+					$res['status'], 
+					$res['name'], 
+					$res['comm'], 
+					$res['email'], 
+					$res['role'], 
+					strip_tags($res['note'])
+				]);
 			}
 		}
-		fclose($o); exit;
+		fclose($o); 
+		exit; // Exit mandatory to prevent WP from loading the rest of the page into the CSV
 	}
 
 	private function sync_form_6() {
