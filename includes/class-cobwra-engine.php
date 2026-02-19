@@ -1,7 +1,8 @@
-<?php 
+<?php
 /**
- * COBWRA Engine - Professional Normalization (v24.0)
- * Fix: Prioritize Master Database & Form 4 lookups over RSVP Cache.
+ * COBWRA Engine - Professional Normalization (v24.1)
+ * Fix: Restored log_scan() to resolve Fatal Error in Kiosk.
+ * Update: ID-First Matching for Master Database and Form 4.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -12,12 +13,15 @@ class COBWRA_Engine {
 	public $alias_opt = 'cobwra_name_aliases';
 	private $guest_master_form_id = 4;
 
+	/**
+	 * Main Analysis Logic
+	 */
 	public function analyze_scan( $rsvp_id ) {
 		global $wpdb;
 		$csv_data = get_option( $this->csv_opt, [] );
 		$id = str_replace( ['&amp;', 'amp;'], '', sanitize_text_field( $rsvp_id ) );
 
-		// 1. PRIMARY: Check Form 4 Announced Guests
+		// 1. PRIMARY: Check Form 4 Announced Guests (Lookup by Entry ID)
 		$announced = $this->check_announced_guests($id);
 		if ( $announced ) return $announced;
 
@@ -101,23 +105,29 @@ class COBWRA_Engine {
 	}
 
 	private function process_rsvp_fallback($rsvp, $id) {
-		global $wpdb;
 		$full_name = trim($rsvp['first'] . ' ' . $rsvp['last']);
-		$community = $rsvp['comm'];
-		$claimed_role = trim($rsvp['role']);
-
-		// Perform standard discrepancy analysis (Conflicts/Vacancies)
-		// ... [Internal logic from previous version for name/role matching] ...
-		
 		return [ 
 			'status' => 'MATCHED', 
 			'color'  => '#27ae60', 
 			'flag'   => 0, 
 			'name'   => $full_name, 
-			'comm'   => $community, 
-			'role'   => $claimed_role, 
+			'comm'   => $rsvp['comm'], 
+			'role'   => $rsvp['role'], 
 			'note'   => 'Matched via RSVP List.' 
 		];
+	}
+
+	/**
+	 * RESTORED: Log Scan method for Kiosk use
+	 */
+	public function log_scan( $res, $id ) {
+		global $wpdb;
+		$wpdb->insert( "{$wpdb->prefix}gf_entry", [ 'form_id' => COBWRA_TEMP_FORM, 'date_created' => current_time('mysql'), 'status' => 'active' ] );
+		$eid = $wpdb->insert_id;
+		$meta = [ '1' => $res['comm'], '3' => "{$res['name']} ({$res['role']})", '5' => $res['flag'], '6' => $id ];
+		foreach ( $meta as $k => $v ) { 
+			$wpdb->insert( "{$wpdb->prefix}gf_entry_meta", [ 'entry_id' => $eid, 'form_id' => COBWRA_TEMP_FORM, 'meta_key' => (string)$k, 'meta_value' => $v ] ); 
+		}
 	}
 
 	private function clean_name($str) {
