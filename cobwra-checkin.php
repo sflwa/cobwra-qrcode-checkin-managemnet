@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: COBWRA Meeting Manager
- * Description: Expert WordPress Developer - Staging Architecture Core (v48.3)
+ * Description: Staging Table Architecture - High Performance Check-in (v48.3)
  * Author: Philip Levine / SFLWA Coding
  * Version: 48.3
  */
@@ -11,11 +11,11 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // Define Path Constants
 define( 'COBWRA_PATH', plugin_dir_path( __FILE__ ) );
 
-// 1. Load All Required Files
-require_once COBWRA_PATH . 'class-cobwra-database.php';
-require_once COBWRA_PATH . 'class-cobwra-engine.php';
-require_once COBWRA_PATH . 'class-cobwra-admin.php';
-require_once COBWRA_PATH . 'class-cobwra-kiosk.php';
+// Load Required Files
+require_once COBWRA_PATH . 'includes/class-cobwra-database.php';
+require_once COBWRA_PATH . 'includes/class-cobwra-engine.php';
+require_once COBWRA_PATH . 'includes/class-cobwra-admin.php';
+require_once COBWRA_PATH . 'includes/class-cobwra-kiosk.php';
 
 /**
  * Plugin Activation Hook
@@ -23,7 +23,7 @@ require_once COBWRA_PATH . 'class-cobwra-kiosk.php';
 register_activation_hook( __FILE__, 'cobwra_plugin_activate' );
 function cobwra_plugin_activate() {
     $db = new COBWRA_Database();
-    $db->create_table(); // Ensure staging table exists
+    $db->create_table(); 
 }
 
 /**
@@ -31,21 +31,20 @@ function cobwra_plugin_activate() {
  */
 class COBWRA_Core {
     public function __construct() {
-        // Initialize components on 'plugins_loaded' to ensure WP is ready
         add_action( 'plugins_loaded', array( $this, 'assemble_plugin' ) );
     }
 
     public function assemble_plugin() {
-        // 2. Instantiate the Engine first as a "Shared Service"
+        // 1. Instantiate the Engine
         $engine = new COBWRA_Engine();
 
-        // 3. Pass the Engine to the Kiosk UI so it can run scans
+        // 2. Pass the Engine to the Kiosk for live validation
         new COBWRA_Kiosk( $engine );
 
-        // 4. Initialize Admin separate from Frontend UI
+        // 3. Initialize Admin components
         new COBWRA_Admin();
     }
 }
 
-// Kick off the plugin
+// Start the plugin
 new COBWRA_Core();
