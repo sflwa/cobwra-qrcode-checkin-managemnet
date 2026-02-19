@@ -1,6 +1,6 @@
 <?php
 /**
- * COBWRA Dashboard - Visual Intelligence & Priority Reporting (v20.0)
+ * COBWRA Dashboard - Visual Intelligence (v20.1)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -27,17 +27,20 @@ class COBWRA_Dashboard {
 
 		$scans = $wpdb->get_results( $wpdb->prepare( "SELECT m.meta_value as rsvp_id FROM {$wpdb->prefix}gf_entry_meta m JOIN {$wpdb->prefix}gf_entry e ON m.entry_id = e.id WHERE e.form_id = %d AND m.meta_key = '6' AND e.status = 'active' ORDER BY e.id DESC", COBWRA_TEMP_FORM ) );
 
-		// DATA PROCESSING
 		$groups = [ 'CONFLICT' => [], 'VACANCY' => [], 'ROLE MISMATCH' => [], 'ANNOUNCED' => [] ];
 		$checked_in_reps = [];
 		$public_count = 0; $announced_count = 0;
 
 		foreach($scans as $s) {
 			$res = $this->engine->analyze_scan($s->rsvp_id);
-			if($res['status'] === 'MATCHED') {
+			
+			// Count for Quorum if Flag is 0 (Matched OR Role Mismatch)
+			if($res['flag'] == 0) {
 				$checked_in_reps[] = $res['comm'];
-				continue;
 			}
+			
+			if($res['status'] === 'MATCHED') continue; // Hide perfect matches from log table
+
 			if($res['status'] === 'GUEST/PUBLIC' || $res['status'] === 'WALK-IN') {
 				$public_count++;
 				continue;
@@ -57,7 +60,7 @@ class COBWRA_Dashboard {
 
 		ob_start(); ?>
 		<style>
-			.cobwra-dash { font-family: sans-serif; background:#f4f4f4; padding:20px; border-radius:10px; }
+			.cobwra-dash { font-family: sans-serif; background:#f4f4f4; padding:20px; }
 			.quorum-hero { padding:30px; text-align:center; border-radius:10px; color:white; margin-bottom:20px; }
 			.stat-bar { display: flex; gap: 15px; margin-bottom: 25px; }
 			.stat-item { flex: 1; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #ddd; text-align: center; }
@@ -84,7 +87,7 @@ class COBWRA_Dashboard {
 			<h3 class="section-label" style="background:#c0392b;">Missing Communities</h3>
 			<div class="grid-box"><?php $i=1; foreach($missing as $m) { echo "<div>{$i}. {$m}</div>"; $i++; } ?></div>
 
-			<h3 class="section-label" style="background:#2c3e50;">Credential Verification Log (Action Items)</h3>
+			<h3 class="section-label" style="background:#2c3e50;">Verification Priority Log (Action Items)</h3>
 			<div style="background:#fff; padding:20px; border:1px solid #ddd; border-top:none;">
 				<form method="POST" style="margin-bottom:15px; text-align:right;">
 					<?php wp_nonce_field('cobwra_dashboard_action', 'cobwra_dashboard_nonce'); ?>
@@ -92,7 +95,7 @@ class COBWRA_Dashboard {
 					<input type="submit" name="cobwra_sync" value="Sync Unique Reps to Form 6" class="button button-primary">
 				</form>
 				<table class="wp-list-table widefat fixed striped">
-					<thead><tr><th>Attendee</th><th>Status</th><th>Observation</th></tr></thead>
+					<thead><tr><th>Attendee</th><th>Status</th><th>Note</th></tr></thead>
 					<tbody>
 						<?php 
 						foreach(['CONFLICT', 'VACANCY', 'ROLE MISMATCH', 'ANNOUNCED'] as $k) {
@@ -101,13 +104,12 @@ class COBWRA_Dashboard {
 							}
 						}
 						?>
-						<tr style="background:#f9f9f9;"><td colspan="3" style="text-align:center; color:#888;">Matches and <?php echo $public_count; ?> Public scans hidden to condense view.</td></tr>
+						<tr style="background:#f9f9f9;"><td colspan="3" style="text-align:center; color:#888;">Matches and <?php echo $public_count; ?> Public scans hidden.</td></tr>
 					</tbody>
 				</table>
 			</div>
 		</div>
 		<?php return ob_get_clean();
 	}
-	
-	// ... (export_csv and sync_form_6 remain same) ...
+	// ... Sync and Export methods ...
 }
