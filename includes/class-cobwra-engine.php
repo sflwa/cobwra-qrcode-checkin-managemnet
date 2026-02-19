@@ -1,6 +1,6 @@
 <?php
 /**
- * COBWRA Engine - Credential Verification Logic (v20.0)
+ * COBWRA Engine - Credential Verification Logic (v20.1)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -9,7 +9,7 @@ class COBWRA_Engine {
 	public $csv_opt  = 'cobwra_rsvp_lookup_data';
 	public $comm_opt = 'cobwra_active_comm_count';
 	public $alias_opt = 'cobwra_name_aliases';
-	private $guest_master_form_id = 4; // Announced Guests
+	private $guest_master_form_id = 4;
 
 	public function analyze_scan( $rsvp_id ) {
 		global $wpdb;
@@ -33,7 +33,7 @@ class COBWRA_Engine {
 		$claimed_role = trim( $rsvp['role'] );
 		$is_rep_rsvp  = (str_contains(strtolower($claimed_role), 'delegate') || str_contains(strtolower($claimed_role), 'alternate'));
 
-		// Fetch Master Roster for Community
+		// Fetch Master Roster
 		$roster = $wpdb->get_results( $wpdb->prepare( "
 			SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f,
 				   MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l,
@@ -52,13 +52,11 @@ class COBWRA_Engine {
 			$m_first = trim($rep->f);
 			$m_last  = trim($rep->l);
 			
-			// Exact or Fuzzy Name Comparison
 			if ( $this->is_name_match( $first_name, $last_name, $m_first, $m_last ) ) {
 				$name_match = true;
 				$official_role = $rep->r;
 			}
 
-			// Track who currently holds the claimed role in the Master
 			if ( strcasecmp( $rep->r, $claimed_role ) === 0 ) {
 				$role_incumbent = $m_first . ' ' . $m_last;
 			}
@@ -66,10 +64,11 @@ class COBWRA_Engine {
 
 		// LOGIC BRANCHING
 		if ( $name_match ) {
+			// BOTH Match and Mismatch get Flag 0 (Official) so they count for Quorum
 			if ( strcasecmp( $official_role, $claimed_role ) === 0 ) {
 				return [ 'status' => 'MATCHED', 'color' => '#27ae60', 'flag' => 0, 'name' => $full_name, 'comm' => $community, 'role' => $claimed_role, 'email' => $rsvp['email'], 'note' => 'Official Record.' ];
 			}
-			return [ 'status' => 'ROLE MISMATCH', 'color' => '#f1c40f', 'flag' => 1, 'name' => $full_name, 'comm' => $community, 'role' => $claimed_role, 'email' => $rsvp['email'], 'note' => "Master lists as: $official_role." ];
+			return [ 'status' => 'ROLE MISMATCH', 'color' => '#f1c40f', 'flag' => 0, 'name' => $full_name, 'comm' => $community, 'role' => $claimed_role, 'email' => $rsvp['email'], 'note' => "Official Rep. Master lists as: $official_role." ];
 		}
 
 		if ( !empty(trim($role_incumbent)) ) {
@@ -87,7 +86,7 @@ class COBWRA_Engine {
 		global $wpdb;
 		$guest = $wpdb->get_row( $wpdb->prepare( "SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f, MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l, MAX(CASE WHEN meta_key = '5' THEN meta_value END) as title FROM {$wpdb->prefix}gf_entry_meta WHERE form_id = %d AND entry_id IN (SELECT entry_id FROM {$wpdb->prefix}gf_entry_meta WHERE meta_key = '6' AND meta_value = %s) GROUP BY entry_id", $this->guest_master_form_id, $id ) );
 		if ( $guest ) { 
-			return [ 'status' => 'ANNOUNCED', 'color' => '#8e44ad', 'flag' => 1, 'name' => "$guest->f $guest->l", 'comm' => 'Guest Master', 'role' => $guest->title, 'note' => 'Confirmed in Form 4.' ]; 
+			return [ 'status' => 'ANNOUNCED', 'color' => '#8e44ad', 'flag' => 1, 'name' => "$guest->f $guest->l", 'comm' => 'Guest Master', 'role' => $guest->title, 'note' => 'Elected Official / Guest.' ]; 
 		}
 		return false;
 	}
@@ -98,10 +97,8 @@ class COBWRA_Engine {
 		$f2 = strtolower(trim(str_replace('Dr. ', '', $f2)));
 		$l2 = strtolower(trim($l2));
 
-		// Last names must match or be a close typo
 		if ( strcasecmp($l1, $l2) !== 0 && levenshtein($l1, $l2) > 1 ) return false;
 
-		// 1. Check Admin Aliases for first names
 		$alias_blob = get_option( $this->alias_opt, '' );
 		if ( ! empty( $alias_blob ) ) {
 			$lines = explode( "\n", str_replace( "\r", "", $alias_blob ) );
@@ -110,11 +107,8 @@ class COBWRA_Engine {
 				if ( in_array($f1, $names) && in_array($f2, $names) ) return true;
 			}
 		}
-		
-		// 2. Fallback: Substring/Prefix (Steve/Steven)
 		if ( strcasecmp($f1, $f2) === 0 ) return true;
 		if ( (str_starts_with($f1, $f2) || str_starts_with($f2, $f1)) && (strlen($f1) >= 3 && strlen($f2) >= 3) ) return true;
-		
 		return levenshtein($f1, $f2) <= 1;
 	}
 
