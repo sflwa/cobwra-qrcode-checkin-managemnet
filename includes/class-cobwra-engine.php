@@ -1,3 +1,4 @@
+<?php 
 /**
  * COBWRA Engine - Professional Normalization (v25.0)
  * Fix: Added Name-Based Lookup for Master List QR Codes.
