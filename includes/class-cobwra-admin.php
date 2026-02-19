@@ -1,6 +1,6 @@
 <?php
 /**
- * COBWRA Admin - Configuration & Alias Management (v19.4)
+ * COBWRA Admin - Header-Aware Importer (v21.0)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -15,7 +15,7 @@ class COBWRA_Admin {
 	}
 
 	public function add_menu() {
-		add_menu_page('COBWRA Check-in', 'COBWRA Check-in', 'manage_options', 'cobwra-checkin', array($this, 'render_page'), 'dashicons-id-alt', 26);
+		add_menu_page('COBWRA Config', 'COBWRA Config', 'manage_options', 'cobwra-checkin', array($this, 'render_page'), 'dashicons-id-alt', 26);
 	}
 
 	public function handle_actions() {
@@ -27,17 +27,43 @@ class COBWRA_Admin {
 			update_option('cobwra_name_aliases', sanitize_textarea_field($_POST['name_aliases']));
 			
 			if (isset($_FILES['rsvp_csv']) && $_FILES['rsvp_csv']['size'] > 0) {
-				$data = [];
-				if (($h = fopen($_FILES['rsvp_csv']['tmp_name'], "r")) !== FALSE) {
-					fgetcsv($h); // Skip Header
-					while (($r = fgetcsv($h, 1000, ",")) !== FALSE) {
-						$data[$r[6]] = ['first'=>$r[0], 'last'=>$r[1], 'email'=>$r[2], 'role'=>$r[3], 'comm'=>$r[4]];
-					}
-					fclose($h);
-					update_option('cobwra_rsvp_lookup_data', $data);
-				}
+				$this->process_rsvp_csv($_FILES['rsvp_csv']['tmp_name']);
 			}
-			add_settings_error('cobwra', 'saved', 'Settings and Data Updated.', 'updated');
+			add_settings_error('cobwra', 'saved', 'Settings Updated.', 'updated');
+		}
+	}
+
+	private function process_rsvp_csv($file) {
+		if (($handle = fopen($file, "r")) !== FALSE) {
+			$headers = fgetcsv($handle);
+			$map = [
+				'id'    => array_search('Entry Id', $headers),
+				'first' => array_search('Name (First)', $headers),
+				'last'  => array_search('Name (Last)', $headers),
+				'email' => array_search('Email', $headers),
+				'role'  => array_search('COBWRA Role', $headers),
+				'comm1' => array_search('Community Name', $headers),
+				'comm2' => array_search('Community / Organization & Role', $headers)
+			];
+
+			$data = [];
+			while (($row = fgetcsv($handle, 1000, ",")) !== FALSE) {
+				$id = $row[$map['id']] ?? '';
+				if (!$id) continue;
+				
+				// Community logic: check primary field, fallback to organization field
+				$comm = !empty($row[$map['comm1']]) ? $row[$map['comm1']] : ($row[$map['comm2']] ?? 'N/A');
+
+				$data[$id] = [
+					'first' => $row[$map['first']] ?? '',
+					'last'  => $row[$map['last']]  ?? '',
+					'email' => $row[$map['email']] ?? '',
+					'role'  => $row[$map['role']]  ?? '',
+					'comm'  => $comm
+				];
+			}
+			fclose($handle);
+			update_option('cobwra_rsvp_lookup_data', $data);
 		}
 	}
 
@@ -48,29 +74,27 @@ class COBWRA_Admin {
 		?>
 		<div class="wrap">
 			<h1>COBWRA Configuration</h1>
-			<div class="card" style="max-width:800px; padding:20px; margin-top:20px;">
+			<div class="card" style="max-width:800px; padding:20px; margin-top:20px; background:#fff; border:1px solid #ccd0d4;">
 				<form method="POST" enctype="multipart/form-data">
 					<?php wp_nonce_field('cobwra_admin_save'); ?>
-					<h3>1. Quorum & RSVP</h3>
+					<h3>1. Active Communities & RSVP Upload</h3>
 					<table class="form-table">
-						<tr><th>Active Communities</th><td><input type="number" name="active_comm_count" value="<?php echo get_option('cobwra_active_comm_count'); ?>" class="small-text"></td></tr>
-						<tr><th>Upload RSVP CSV</th><td><input type="file" name="rsvp_csv"></td></tr>
+						<tr><th>Total Active Communities</th><td><input type="number" name="active_comm_count" value="<?php echo get_option('cobwra_active_comm_count'); ?>" class="small-text"></td></tr>
+						<tr><th>RSVP Export (Full CSV)</th><td><input type="file" name="rsvp_csv"></td></tr>
 					</table>
 					<hr>
-					<h3>2. Name Aliases (Fuzzy Matching)</h3>
-					<p class="description">One group per line, comma separated. Example: <em>Steve,Steven,Stephen</em></p>
+					<h3>2. Name Aliases</h3>
 					<textarea name="name_aliases" rows="6" class="large-text" placeholder="Pat,Patricia,Patty"><?php echo esc_textarea($aliases); ?></textarea>
 					<p class="submit"><input type="submit" name="save_cobwra_config" class="button button-primary" value="Save All Changes"></p>
 				</form>
 			</div>
-
 			<?php if(!empty($csv_data)): ?>
-				<h3>RSVP Preview (Top 10)</h3>
+				<h3 style="margin-top:40px;">Loaded RSVP Preview (10 Records)</h3>
 				<table class="wp-list-table widefat fixed striped">
-					<thead><tr><th>ID</th><th>Name</th><th>Community</th><th>Role</th></tr></thead>
+					<thead><tr><th>Entry ID</th><th>Name</th><th>Community</th><th>Role</th></tr></thead>
 					<tbody>
-						<?php $p = array_slice($csv_data, 0, 10, true);
-						foreach($p as $id => $r) { echo "<tr><td>$id</td><td>{$r['first']} {$r['last']}</td><td>{$r['comm']}</td><td>{$r['role']}</td></tr>"; } ?>
+						<?php $preview = array_slice($csv_data, 0, 10, true);
+						foreach($preview as $id => $r) { echo "<tr><td>$id</td><td>{$r['first']} {$r['last']}</td><td>{$r['comm']}</td><td>{$r['role']}</td></tr>"; } ?>
 					</tbody>
 				</table>
 			<?php endif; ?>
