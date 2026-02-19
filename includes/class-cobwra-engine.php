@@ -1,6 +1,7 @@
 <?php
 /**
- * COBWRA Engine - Professional Normalization (v22.0)
+ * COBWRA Engine - Professional Normalization (v23.0)
+ * Fix: Corrected Form 4 Field Mapping (Org=6, Title=5)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -16,7 +17,7 @@ class COBWRA_Engine {
 		$csv_data = get_option( $this->csv_opt, [] );
 		$id = str_replace( ['&amp;', 'amp;'], '', sanitize_text_field( $rsvp_id ) );
 
-		// 1. Check Form 4 Announced Guests
+		// 1. Check Form 4 Announced Guests (Checked by Entry ID or Metadata)
 		$announced = $this->check_announced_guests($id);
 		if ( $announced ) return $announced;
 
@@ -48,16 +49,18 @@ class COBWRA_Engine {
 		$official_role = ''; 
 		$role_incumbent = '';
 
-		foreach ( $roster as $rep ) {
-			$m_f = trim($rep->f);
-			$m_l = trim($rep->l);
-			
-			if ( $this->is_name_match( $first_name, $last_name, $m_f, $m_l ) ) {
-				$name_match = true;
-				$official_role = $rep->r;
-			}
-			if ( strcasecmp( $rep->r, $claimed_role ) === 0 ) {
-				$role_incumbent = $m_f . ' ' . $m_l;
+		if ( $roster ) {
+			foreach ( $roster as $rep ) {
+				$m_f = trim($rep->f ?? '');
+				$m_l = trim($rep->l ?? '');
+				
+				if ( $this->is_name_match( $first_name, $last_name, $m_f, $m_l ) ) {
+					$name_match = true;
+					$official_role = $rep->r;
+				}
+				if ( strcasecmp( $rep->r ?? '', $claimed_role ) === 0 ) {
+					$role_incumbent = $m_f . ' ' . $m_l;
+				}
 			}
 		}
 
@@ -81,19 +84,38 @@ class COBWRA_Engine {
 
 	private function check_announced_guests($id) {
 		global $wpdb;
-		$guest = $wpdb->get_row( $wpdb->prepare( "SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f, MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l, MAX(CASE WHEN meta_key = '5' THEN meta_value END) as title FROM {$wpdb->prefix}gf_entry_meta WHERE form_id = %d AND entry_id IN (SELECT entry_id FROM {$wpdb->prefix}gf_entry_meta WHERE meta_key = '6' AND meta_value = %s) GROUP BY entry_id", $this->guest_master_form_id, $id ) );
-		if ( $guest ) { return [ 'status' => 'ANNOUNCED', 'color' => '#8e44ad', 'flag' => 1, 'name' => "$guest->f $guest->l", 'comm' => 'Guest Master', 'role' => $guest->title, 'note' => 'Confirmed (Form 4).' ]; }
+		// Form 4 Mapping: 1.3=First, 1.6=Last, 6=Organization, 5=Title
+		$guest = $wpdb->get_row( $wpdb->prepare( "
+			SELECT 
+				MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f, 
+				MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l, 
+				MAX(CASE WHEN meta_key = '6' THEN meta_value END) as org,
+				MAX(CASE WHEN meta_key = '5' THEN meta_value END) as title 
+			FROM {$wpdb->prefix}gf_entry_meta 
+			WHERE form_id = %d AND entry_id = %d 
+			GROUP BY entry_id", 
+			$this->guest_master_form_id, 
+			$id 
+		) );
+
+		if ( $guest && !empty($guest->f) ) { 
+			return [ 
+				'status' => 'ANNOUNCED', 
+				'color'  => '#8e44ad', 
+				'flag'   => 1, 
+				'name'   => trim("$guest->f $guest->l"), 
+				'comm'   => !empty($guest->org) ? $guest->org : 'Guest', 
+				'role'   => $guest->title, 
+				'note'   => 'Confirmed Guest (Form 4).' 
+			]; 
+		}
 		return false;
 	}
 
 	private function is_name_match( $f1, $l1, $f2, $l2 ) {
 		$f1 = $this->clean_name($f1); $l1 = $this->clean_name($l1);
 		$f2 = $this->clean_name($f2); $l2 = $this->clean_name($l2);
-
-		// Last names must match
 		if ( strcasecmp($l1, $l2) !== 0 ) return false;
-
-		// Check Admin Aliases
 		$aliases = get_option( $this->alias_opt, '' );
 		if ( ! empty( $aliases ) ) {
 			foreach ( explode( "\n", str_replace( "\r", "", $aliases ) ) as $line ) {
@@ -101,19 +123,15 @@ class COBWRA_Engine {
 				if ( in_array($f1, $names) && in_array($f2, $names) ) return true;
 			}
 		}
-		
 		if ( $f1 === $f2 ) return true;
 		if ( (str_starts_with($f1, $f2) || str_starts_with($f2, $f1)) && (strlen($f1) >= 3 && strlen($f2) >= 3) ) return true;
-		return levenshtein($f1, $f2) <= 1;
+		return (function_exists('levenshtein')) ? levenshtein($f1, $f2) <= 1 : $f1 === $f2;
 	}
 
 	private function clean_name($str) {
 		$str = strtolower(trim($str));
-		// Strip Titles
-		$str = str_replace(['dr.', 'dr', 'doctor', 'hon.', 'hon'], '', $str);
-		// Strip Middle Initials at the end (e.g., "Michelle A" or "Michelle A.")
+		$str = str_replace(['dr.', 'dr ', 'doctor', 'hon.', 'hon '], '', $str);
 		$str = preg_replace('/\s[a-z]\.?$/', '', $str); 
-		// Strip Middle Initials at the beginning (e.g., "A Gibson" or "A. Gibson")
 		$str = preg_replace('/^[a-z]\.?\s/', '', $str); 
 		return trim($str);
 	}
