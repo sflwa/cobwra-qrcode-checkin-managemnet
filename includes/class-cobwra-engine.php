@@ -1,7 +1,7 @@
 <?php
 /**
- * COBWRA Engine - Professional Normalization (v35.0)
- * Logic: Strict Matching with Persistent File Logging.
+ * COBWRA Engine - Professional Normalization (v36.0)
+ * Fix: Universal Log Path and Strict Search Debugging.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -13,17 +13,15 @@ class COBWRA_Engine {
 	private $log_file;
 
 	public function __construct() {
-		// Define log path: wp-content/plugins/your-plugin/includes/cobwra_debug.log
-		$this->log_file = plugin_dir_path( __FILE__ ) . 'cobwra_debug.log';
+		// Use WP_CONTENT_DIR to avoid permission issues within plugin folders
+		$this->log_file = WP_CONTENT_DIR . '/debug_cobwra.log';
 	}
 
-	/**
-	 * Custom Logger
-	 */
 	private function log_event( $message ) {
 		$timestamp = current_time( 'mysql' );
 		$entry = "[{$timestamp}] {$message}\n";
-		file_put_contents( $this->log_file, $entry, FILE_APPEND );
+		// Force append or create
+		error_log( $entry, 3, $this->log_file );
 	}
 
 	public function analyze_scan( $comm_or_id, $last_name = '' ) {
@@ -32,46 +30,42 @@ class COBWRA_Engine {
 		$comm_input = sanitize_text_field( $comm_or_id );
 		$last_input = sanitize_text_field( $last_name );
 		
-		$this->log_event( "--- NEW SCAN DETECTED ---" );
-		$this->log_event( "Input Params: Community/ID: '{$comm_input}', Last Name: '{$last_input}'" );
+		$this->log_event( "--- NEW SCAN ATTEMPT ---" );
+		$this->log_event( "Input Received -> C: '{$comm_input}' | L: '{$last_input}'" );
 
 		// 1. STEP: Strict Master Roster Match (Form 2)
 		if ( ! empty( $comm_input ) && ! empty( $last_input ) ) {
-			$this->log_event( "Step 1: Attempting Strict Master Match (Form 2) for {$comm_input} | {$last_input}" );
+			$this->log_event( "Searching Master (Form 2) for Exact Pair..." );
 			$master = $this->lookup_roster_strict( COBWRA_MASTER_FORM, '3', $comm_input, $last_input );
 			if ( $master ) {
-				$this->log_event( "Result: SUCCESS - Match found in Master Roster." );
+				$this->log_event( "SUCCESS: Found Master Rep: " . $master['name'] );
 				return $master;
 			}
-			$this->log_event( "Result: No Match in Master Roster." );
 
 			// 2. STEP: Strict Guest Master Match (Form 4)
-			$this->log_event( "Step 2: Attempting Strict Guest Match (Form 4) for {$comm_input} | {$last_input}" );
+			$this->log_event( "Searching Guest Master (Form 4) for Exact Pair..." );
 			$guest = $this->lookup_roster_strict( $this->guest_master_form_id, '6', $comm_input, $last_input );
 			if ( $guest ) {
-				$this->log_event( "Result: SUCCESS - Match found in Guest Master." );
+				$this->log_event( "SUCCESS: Found Announced Guest: " . $guest['name'] );
 				return $guest;
 			}
-			$this->log_event( "Result: No Match in Guest Master." );
 		}
 
-		// 3. STEP: RSVP/ID Fallback
-		$lookup_id = is_numeric( $comm_input ) ? $comm_input : '';
-		if ( ! empty( $lookup_id ) ) {
-			$this->log_event( "Step 3: Attempting RSVP ID Fallback for ID: {$lookup_id}" );
+		// 3. STEP: RSVP ID Fallback
+		if ( is_numeric( $comm_input ) ) {
+			$this->log_event( "Numeric ID detected, checking RSVP Cache for ID: " . $comm_input );
 			$csv_data = get_option( $this->csv_opt, array() );
-			if ( isset( $csv_data[$lookup_id] ) ) {
-				$this->log_event( "Result: Match found in RSVP CSV Cache." );
-				return $this->identify_discrepancy( $csv_data[$lookup_id] );
+			if ( isset( $csv_data[$comm_input] ) ) {
+				$this->log_event( "SUCCESS: Found ID in RSVP Cache." );
+				return $this->identify_discrepancy( $csv_data[$comm_input] );
 			}
-			$this->log_event( "Result: No Match in RSVP Cache." );
 		}
 
-		$this->log_event( "Final Status: WALK-IN (No records found)" );
+		$this->log_event( "FAILURE: No match found. Returning WALK-IN." );
 		return array( 
 			'status' => 'WALK-IN', 'color' => '#636e72', 'flag' => 2, 
 			'name' => 'Unknown', 'comm' => 'N/A', 'role' => 'Guest', 
-			'note' => 'Not recognized.' 
+			'note' => 'ID/Name not recognized.' 
 		);
 	}
 
@@ -88,18 +82,17 @@ class COBWRA_Engine {
 			$form_id, $comm_key, $comm_val, $last_val
 		);
 		
-		$this->log_event( "Running SQL: " . $sql );
+		$this->log_event( "SQL Query: " . $sql );
 		$entry_id = $wpdb->get_var( $sql );
 		
 		if ( $entry_id ) {
-			$this->log_event( "SQL found Entry ID: " . $entry_id );
+			$this->log_event( "Database found Entry ID: " . $entry_id );
 			return $this->check_roster_by_id( $form_id, $entry_id );
 		}
 		return false;
 	}
 
-    // ... (rest of helper methods check_roster_by_id and log_scan remain unchanged) ...
-    private function check_roster_by_id( $form_id, $eid ) {
+	public function check_roster_by_id( $form_id, $eid ) {
 		global $wpdb;
 		$is_guest = ( $form_id == $this->guest_master_form_id );
 		$comm_field = $is_guest ? '6' : '3';
