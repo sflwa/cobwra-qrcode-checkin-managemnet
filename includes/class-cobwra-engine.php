@@ -1,6 +1,6 @@
 <?php
 /**
- * COBWRA Engine - Advanced Normalization (v22.0)
+ * COBWRA Engine - Professional Normalization (v22.0)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -16,9 +16,11 @@ class COBWRA_Engine {
 		$csv_data = get_option( $this->csv_opt, [] );
 		$id = str_replace( ['&amp;', 'amp;'], '', sanitize_text_field( $rsvp_id ) );
 
+		// 1. Check Form 4 Announced Guests
 		$announced = $this->check_announced_guests($id);
 		if ( $announced ) return $announced;
 
+		// 2. Check RSVP Cache
 		if ( ! isset( $csv_data[$id] ) ) {
 			return [ 'status' => 'WALK-IN', 'color' => '#636e72', 'flag' => 2, 'name' => 'Unknown', 'comm' => 'N/A', 'role' => 'Guest', 'note' => 'ID not in RSVP list.' ];
 		}
@@ -31,6 +33,7 @@ class COBWRA_Engine {
 		$claimed_role = trim( $rsvp['role'] );
 		$is_rep_rsvp  = (str_contains(strtolower($claimed_role), 'delegate') || str_contains(strtolower($claimed_role), 'alternate'));
 
+		// Fetch Master Roster
 		$roster = $wpdb->get_results( $wpdb->prepare( "
 			SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f,
 				   MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l,
@@ -83,18 +86,14 @@ class COBWRA_Engine {
 		return false;
 	}
 
-	/**
-	 * Enhanced Name Matcher: Strips Titles, Middle Initials, and Case
-	 */
 	private function is_name_match( $f1, $l1, $f2, $l2 ) {
-		// 1. Standard Clean (Lower case & trim)
 		$f1 = $this->clean_name($f1); $l1 = $this->clean_name($l1);
 		$f2 = $this->clean_name($f2); $l2 = $this->clean_name($l2);
 
 		// Last names must match
 		if ( strcasecmp($l1, $l2) !== 0 ) return false;
 
-		// 2. Check Aliases (Steve/Steven)
+		// Check Admin Aliases
 		$aliases = get_option( $this->alias_opt, '' );
 		if ( ! empty( $aliases ) ) {
 			foreach ( explode( "\n", str_replace( "\r", "", $aliases ) ) as $line ) {
@@ -102,11 +101,9 @@ class COBWRA_Engine {
 				if ( in_array($f1, $names) && in_array($f2, $names) ) return true;
 			}
 		}
-
-		// 3. Prefix/Initial Fallback
+		
 		if ( $f1 === $f2 ) return true;
 		if ( (str_starts_with($f1, $f2) || str_starts_with($f2, $f1)) && (strlen($f1) >= 3 && strlen($f2) >= 3) ) return true;
-		
 		return levenshtein($f1, $f2) <= 1;
 	}
 
@@ -114,8 +111,10 @@ class COBWRA_Engine {
 		$str = strtolower(trim($str));
 		// Strip Titles
 		$str = str_replace(['dr.', 'dr', 'doctor', 'hon.', 'hon'], '', $str);
-		// Strip Middle Initials (e.g., "Michelle A" or "Michelle A.")
-		$str = preg_replace('/\s[a-z]\.?$/', '', trim($str)); 
+		// Strip Middle Initials at the end (e.g., "Michelle A" or "Michelle A.")
+		$str = preg_replace('/\s[a-z]\.?$/', '', $str); 
+		// Strip Middle Initials at the beginning (e.g., "A Gibson" or "A. Gibson")
+		$str = preg_replace('/^[a-z]\.?\s/', '', $str); 
 		return trim($str);
 	}
 
