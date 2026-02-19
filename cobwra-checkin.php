@@ -1,75 +1,51 @@
 <?php
 /**
  * Plugin Name: COBWRA Meeting Manager
- * Description: Expert WordPress Developer - Staging Table & Kiosk Loader (v48.2)
+ * Description: Expert WordPress Developer - Staging Architecture Core (v48.3)
  * Author: Philip Levine / SFLWA Coding
- * Version: 48.2
+ * Version: 48.3
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-// Define Plugin Constants
-define( 'COBWRA_VERSION', '48.2' );
+// Define Path Constants
 define( 'COBWRA_PATH', plugin_dir_path( __FILE__ ) );
-define( 'COBWRA_URL', plugin_dir_url( __FILE__ ) );
 
-// Load Required Classes
+// 1. Load All Required Files
 require_once COBWRA_PATH . 'class-cobwra-database.php';
-require_once COBWRA_PATH . 'class-cobwra-admin.php';
 require_once COBWRA_PATH . 'class-cobwra-engine.php';
+require_once COBWRA_PATH . 'class-cobwra-admin.php';
+require_once COBWRA_PATH . 'class-cobwra-kiosk.php';
 
 /**
- * Plugin Activation: Create the Staging Table
+ * Plugin Activation Hook
  */
 register_activation_hook( __FILE__, 'cobwra_plugin_activate' );
 function cobwra_plugin_activate() {
     $db = new COBWRA_Database();
-    $db->create_table(); // Uses dbDelta for safe schema updates
+    $db->create_table(); // Ensure staging table exists
 }
 
 /**
- * Initialize Admin & Kiosk Assets
+ * Main Plugin Controller Class
  */
 class COBWRA_Core {
     public function __construct() {
-        add_action( 'plugins_loaded', array( $this, 'init_components' ) );
-        add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_kiosk_assets' ) );
+        // Initialize components on 'plugins_loaded' to ensure WP is ready
+        add_action( 'plugins_loaded', array( $this, 'assemble_plugin' ) );
     }
 
-    public function init_components() {
+    public function assemble_plugin() {
+        // 2. Instantiate the Engine first as a "Shared Service"
+        $engine = new COBWRA_Engine();
+
+        // 3. Pass the Engine to the Kiosk UI so it can run scans
+        new COBWRA_Kiosk( $engine );
+
+        // 4. Initialize Admin separate from Frontend UI
         new COBWRA_Admin();
-    }
-
-    /**
-     * Enqueues the Kiosk JS/CSS only on the check-in page
-     */
-    public function enqueue_kiosk_assets() {
-        // Only load on your specific check-in page slug
-        if ( is_page( 'checkin' ) ) {
-            // Load Kiosk CSS
-            wp_enqueue_style( 
-                'cobwra-kiosk-style', 
-                COBWRA_URL . 'assets/css/kiosk-style.css', 
-                array(), 
-                COBWRA_VERSION 
-            );
-
-            // Load Kiosk JS Engine
-            wp_enqueue_script( 
-                'cobwra-kiosk-engine', 
-                COBWRA_URL . 'assets/js/cobwra-kiosk.js', 
-                array( 'jquery' ), 
-                COBWRA_VERSION, 
-                true 
-            );
-
-            // Pass Ajax URL to the Kiosk script
-            wp_localize_script( 'cobwra-kiosk-engine', 'cobwra_params', array(
-                'ajax_url' => admin_url( 'admin-ajax.php' ),
-                'nonce'    => wp_create_nonce( 'cobwra_kiosk_nonce' )
-            ));
-        }
     }
 }
 
+// Kick off the plugin
 new COBWRA_Core();
