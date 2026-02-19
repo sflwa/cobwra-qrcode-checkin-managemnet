@@ -1,6 +1,6 @@
 <?php
 /**
- * COBWRA Engine - Credential Verification Logic (v21.0)
+ * COBWRA Engine - Advanced Normalization (v22.0)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -16,11 +16,9 @@ class COBWRA_Engine {
 		$csv_data = get_option( $this->csv_opt, [] );
 		$id = str_replace( ['&amp;', 'amp;'], '', sanitize_text_field( $rsvp_id ) );
 
-		// 1. Check Form 4 Announced Guests
 		$announced = $this->check_announced_guests($id);
 		if ( $announced ) return $announced;
 
-		// 2. Check RSVP Cache
 		if ( ! isset( $csv_data[$id] ) ) {
 			return [ 'status' => 'WALK-IN', 'color' => '#636e72', 'flag' => 2, 'name' => 'Unknown', 'comm' => 'N/A', 'role' => 'Guest', 'note' => 'ID not in RSVP list.' ];
 		}
@@ -33,7 +31,6 @@ class COBWRA_Engine {
 		$claimed_role = trim( $rsvp['role'] );
 		$is_rep_rsvp  = (str_contains(strtolower($claimed_role), 'delegate') || str_contains(strtolower($claimed_role), 'alternate'));
 
-		// Fetch Master Roster for Community (Form 2)
 		$roster = $wpdb->get_results( $wpdb->prepare( "
 			SELECT MAX(CASE WHEN meta_key = '1.3' THEN meta_value END) as f,
 				   MAX(CASE WHEN meta_key = '1.6' THEN meta_value END) as l,
@@ -62,7 +59,6 @@ class COBWRA_Engine {
 		}
 
 		if ( $name_match ) {
-			// Both Scenarios = Flag 0 (Official Standing)
 			if ( strcasecmp( $official_role, $claimed_role ) === 0 ) {
 				return [ 'status' => 'MATCHED', 'color' => '#27ae60', 'flag' => 0, 'name' => $full_name, 'comm' => $community, 'role' => $claimed_role, 'email' => $rsvp['email'], 'note' => 'Official Record.' ];
 			}
@@ -87,22 +83,40 @@ class COBWRA_Engine {
 		return false;
 	}
 
+	/**
+	 * Enhanced Name Matcher: Strips Titles, Middle Initials, and Case
+	 */
 	private function is_name_match( $f1, $l1, $f2, $l2 ) {
-		$f1 = strtolower(trim(str_replace('Dr. ', '', $f1)));
-		$l1 = strtolower(trim($l1));
-		$f2 = strtolower(trim(str_replace('Dr. ', '', $f2)));
-		$l2 = strtolower(trim($l2));
-		if ( strcasecmp($l1, $l2) !== 0 && levenshtein($l1, $l2) > 1 ) return false;
+		// 1. Standard Clean (Lower case & trim)
+		$f1 = $this->clean_name($f1); $l1 = $this->clean_name($l1);
+		$f2 = $this->clean_name($f2); $l2 = $this->clean_name($l2);
+
+		// Last names must match
+		if ( strcasecmp($l1, $l2) !== 0 ) return false;
+
+		// 2. Check Aliases (Steve/Steven)
 		$aliases = get_option( $this->alias_opt, '' );
 		if ( ! empty( $aliases ) ) {
 			foreach ( explode( "\n", str_replace( "\r", "", $aliases ) ) as $line ) {
 				$names = array_map( 'trim', explode( ',', strtolower( $line ) ) );
-				if ( in_array(explode(' ',$f1)[0], $names) && in_array(explode(' ',$f2)[0], $names) ) return true;
+				if ( in_array($f1, $names) && in_array($f2, $names) ) return true;
 			}
 		}
-		if ( strcasecmp($f1, $f2) === 0 ) return true;
+
+		// 3. Prefix/Initial Fallback
+		if ( $f1 === $f2 ) return true;
 		if ( (str_starts_with($f1, $f2) || str_starts_with($f2, $f1)) && (strlen($f1) >= 3 && strlen($f2) >= 3) ) return true;
+		
 		return levenshtein($f1, $f2) <= 1;
+	}
+
+	private function clean_name($str) {
+		$str = strtolower(trim($str));
+		// Strip Titles
+		$str = str_replace(['dr.', 'dr', 'doctor', 'hon.', 'hon'], '', $str);
+		// Strip Middle Initials (e.g., "Michelle A" or "Michelle A.")
+		$str = preg_replace('/\s[a-z]\.?$/', '', trim($str)); 
+		return trim($str);
 	}
 
 	public function log_scan( $res, $id ) {
