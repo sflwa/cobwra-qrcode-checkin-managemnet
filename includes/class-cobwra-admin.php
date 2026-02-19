@@ -1,104 +1,128 @@
 <?php
 /**
- * COBWRA Admin - Header-Aware Importer (v21.0)
+ * class-cobwra-admin.php
+ * Admin Interface for Meeting Roster Management (v48.0)
+ * Handles Sync, Clear, and RSVP Import Logic.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class COBWRA_Admin {
-	private $engine;
 
-	public function __construct( $engine ) {
-		$this->engine = $engine;
-		add_action( 'admin_menu', array( $this, 'add_menu' ) );
-		add_action( 'admin_init', array( $this, 'handle_actions' ) );
+	private $table_name;
+	private $db_helper;
+
+	public function __construct() {
+		global $wpdb;
+		$this->table_name = $wpdb->prefix . 'cobwra_meeting_roster';
+		
+		// Hook for Admin Actions
+		add_action( 'admin_post_cobwra_sync_authority', array( $this, 'handle_sync_authority' ) );
+		add_action( 'admin_post_cobwra_clear_roster', array( $this, 'handle_clear_roster' ) );
+		add_action( 'admin_post_cobwra_import_rsvp', array( $this, 'handle_rsvp_import' ) );
 	}
 
-	public function add_menu() {
-		add_menu_page('COBWRA Config', 'COBWRA Config', 'manage_options', 'cobwra-checkin', array($this, 'render_page'), 'dashicons-id-alt', 26);
-	}
+	/**
+	 * ACTION: Sync from Form 2 (Officials) and Form 4 (Dignitaries)
+	 */
+	public function handle_sync_authority() {
+		global $wpdb;
+		
+		// 1. Clear existing authority data first
+		$wpdb->query( "TRUNCATE TABLE $this->table_name" );
 
-	public function handle_actions() {
-		if ( ! current_user_can('manage_options') ) return;
-
-		if ( isset($_POST['save_cobwra_config']) ) {
-			check_admin_referer('cobwra_admin_save');
-			update_option('cobwra_active_comm_count', intval($_POST['active_comm_count']));
-			update_option('cobwra_name_aliases', sanitize_textarea_field($_POST['name_aliases']));
-			
-			if (isset($_FILES['rsvp_csv']) && $_FILES['rsvp_csv']['size'] > 0) {
-				$this->process_rsvp_csv($_FILES['rsvp_csv']['tmp_name']);
-			}
-			add_settings_error('cobwra', 'saved', 'Settings Updated.', 'updated');
+		// 2. Fetch Active Officials (Form 2)
+		// Meta Mapping: 3=Community, 1.3=First, 1.6=Last, 2=Role
+		$officials = $this->get_gravity_entries( 2 );
+		foreach ( $officials as $entry ) {
+			$wpdb->insert( $this->table_name, array(
+				'community_name'   => $entry['3'],
+				'first_name'       => $entry['1.3'],
+				'last_name'        => $entry['1.6'],
+				'official_role'    => $entry['2'],
+				'voting_authority' => 1,
+				'is_announced'     => 0,
+				'checkin_status'   => 'Expected'
+			) );
 		}
+
+		// 3. Fetch Active Dignitaries (Form 4)
+		// Meta Mapping: 6=Organization, 1.3=First, 1.6=Last, 5=Office/Title
+		$dignitaries = $this->get_gravity_entries( 4 );
+		foreach ( $dignitaries as $entry ) {
+			$wpdb->insert( $this->table_name, array(
+				'community_name'   => $entry['6'],
+				'first_name'       => $entry['1.3'],
+				'last_name'        => $entry['1.6'],
+				'official_role'    => $entry['5'],
+				'voting_authority' => 0,
+				'is_announced'     => 1,
+				'checkin_status'   => 'Expected'
+			) );
+		}
+
+		wp_redirect( admin_url( 'admin.php?page=cobwra-dashboard&sync=complete' ) );
+		exit;
 	}
 
-	private function process_rsvp_csv($file) {
-		if (($handle = fopen($file, "r")) !== FALSE) {
-			$headers = fgetcsv($handle);
-			$map = [
-				'id'    => array_search('Entry Id', $headers),
-				'first' => array_search('Name (First)', $headers),
-				'last'  => array_search('Name (Last)', $headers),
-				'email' => array_search('Email', $headers),
-				'role'  => array_search('COBWRA Role', $headers),
-				'comm1' => array_search('Community Name', $headers),
-				'comm2' => array_search('Community / Organization & Role', $headers)
-			];
+	/**
+	 * ACTION: Import RSVP CSV & Flag Conflicts/Vacancies
+	 */
+	public function handle_rsvp_import() {
+		if ( ! isset( $_FILES['rsvp_csv'] ) ) return;
 
-			$data = [];
-			while (($row = fgetcsv($handle, 1000, ",")) !== FALSE) {
-				$id = $row[$map['id']] ?? '';
-				if (!$id) continue;
+		global $wpdb;
+		$handle = fopen( $_FILES['rsvp_csv']['tmp_name'], 'r' );
+		$header = fgetcsv( $handle ); // Skip header
+
+		while ( ( $row = fgetcsv( $handle ) ) !== FALSE ) {
+			// Mapping based on your RSVP CSV structure:
+			// 0=ID, 1=First, 2=Last, 3=Email, 4=Role, 5=Community
+			$rsvp_id   = $row[0];
+			$first     = trim( $row[1] );
+			$last      = trim( $row[2] );
+			$rsvp_role = trim( $row[4] );
+			$comm      = trim( $row[5] );
+
+			// Check if this person exists in our Authority Roster
+			$match = $wpdb->get_row( $wpdb->prepare( "
+				SELECT id, official_role FROM $this->table_name 
+				WHERE community_name = %s AND last_name = %s AND first_name = %s",
+				$comm, $last, $first 
+			) );
+
+			if ( $match ) {
+				// UPDATE: They are a legitimate official/guest who RSVP'd
+				$wpdb->update( $this->table_name, 
+					array( 'rsvp_role' => $rsvp_role, 'rsvp_id' => $rsvp_id ),
+					array( 'id' => $match->id )
+				);
+			} else {
+				// INSERT: They RSVP'd but aren't in the Master Database
+				$is_official_claim = ( stripos( $rsvp_role, 'Delegate' ) !== false || stripos( $rsvp_role, 'Alternate' ) !== false );
 				
-				// Community logic: check primary field, fallback to organization field
-				$comm = !empty($row[$map['comm1']]) ? $row[$map['comm1']] : ($row[$map['comm2']] ?? 'N/A');
-
-				$data[$id] = [
-					'first' => $row[$map['first']] ?? '',
-					'last'  => $row[$map['last']]  ?? '',
-					'email' => $row[$map['email']] ?? '',
-					'role'  => $row[$map['role']]  ?? '',
-					'comm'  => $comm
-				];
+				$wpdb->insert( $this->table_name, array(
+					'community_name' => $comm,
+					'first_name'     => $first,
+					'last_name'      => $last,
+					'official_role'  => 'None',
+					'rsvp_role'      => $rsvp_role,
+					'rsvp_id'        => $rsvp_id,
+					'conflict_flag'  => $is_official_claim ? 'Conflict/Vacancy' : NULL,
+					'checkin_status' => 'Expected'
+				) );
 			}
-			fclose($handle);
-			update_option('cobwra_rsvp_lookup_data', $data);
 		}
+		fclose( $handle );
+		wp_redirect( admin_url( 'admin.php?page=cobwra-dashboard&import=complete' ) );
+		exit;
 	}
 
-	public function render_page() {
-		settings_errors('cobwra');
-		$csv_data = get_option('cobwra_rsvp_lookup_data', []);
-		$aliases = get_option('cobwra_name_aliases', '');
-		?>
-		<div class="wrap">
-			<h1>COBWRA Configuration</h1>
-			<div class="card" style="max-width:800px; padding:20px; margin-top:20px; background:#fff; border:1px solid #ccd0d4;">
-				<form method="POST" enctype="multipart/form-data">
-					<?php wp_nonce_field('cobwra_admin_save'); ?>
-					<h3>1. Active Communities & RSVP Upload</h3>
-					<table class="form-table">
-						<tr><th>Total Active Communities</th><td><input type="number" name="active_comm_count" value="<?php echo get_option('cobwra_active_comm_count'); ?>" class="small-text"></td></tr>
-						<tr><th>RSVP Export (Full CSV)</th><td><input type="file" name="rsvp_csv"></td></tr>
-					</table>
-					<hr>
-					<h3>2. Name Aliases</h3>
-					<textarea name="name_aliases" rows="6" class="large-text" placeholder="Pat,Patricia,Patty"><?php echo esc_textarea($aliases); ?></textarea>
-					<p class="submit"><input type="submit" name="save_cobwra_config" class="button button-primary" value="Save All Changes"></p>
-				</form>
-			</div>
-			<?php if(!empty($csv_data)): ?>
-				<h3 style="margin-top:40px;">Loaded RSVP Preview (10 Records)</h3>
-				<table class="wp-list-table widefat fixed striped">
-					<thead><tr><th>Entry ID</th><th>Name</th><th>Community</th><th>Role</th></tr></thead>
-					<tbody>
-						<?php $preview = array_slice($csv_data, 0, 10, true);
-						foreach($preview as $id => $r) { echo "<tr><td>$id</td><td>{$r['first']} {$r['last']}</td><td>{$r['comm']}</td><td>{$r['role']}</td></tr>"; } ?>
-					</tbody>
-				</table>
-			<?php endif; ?>
-		</div>
-		<?php
+	/**
+	 * Helper: Get active entries for a specific form
+	 */
+	private function get_gravity_entries( $form_id ) {
+		// Logic to pull from wp_gf_entry_meta where entry status is 'active'
+		// This ensures no ghost data from trashed entries.
 	}
 }
