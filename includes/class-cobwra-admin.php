@@ -1,173 +1,80 @@
 <?php
 /**
- * COBWRA Admin Settings Class
- * Handles CSV uploads, data previews, and plugin configuration.
+ * COBWRA Admin - Configuration & Alias Management (v19.4)
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class COBWRA_Admin {
-
 	private $engine;
 
 	public function __construct( $engine ) {
 		$this->engine = $engine;
-		add_action( 'admin_menu', array( $this, 'add_menu_pages' ) );
-		add_action( 'admin_init', array( $this, 'handle_admin_actions' ) );
+		add_action( 'admin_menu', array( $this, 'add_menu' ) );
+		add_action( 'admin_init', array( $this, 'handle_actions' ) );
 	}
 
-	public function add_menu_pages() {
-		// Main Menu Item
-		add_menu_page(
-			'COBWRA Check-in',
-			'COBWRA Check-in',
-			'manage_options',
-			'cobwra-checkin',
-			array( $this, 'render_settings_page' ),
-			'dashicons-id-alt',
-			26
-		);
-
-		// Submenu for the Live Dashboard (so it's accessible in admin too)
-		add_submenu_page(
-			'cobwra-checkin',
-			'Attendance Dashboard',
-			'Attendance Log',
-			'manage_options',
-			'cobwra-dashboard',
-			array( $this, 'render_admin_dashboard' )
-		);
+	public function add_menu() {
+		add_menu_page('COBWRA Check-in', 'COBWRA Check-in', 'manage_options', 'cobwra-checkin', array($this, 'render_page'), 'dashicons-id-alt', 26);
 	}
 
-	/**
-	 * Logic for CSV Uploads and Deletions
-	 */
-	public function handle_admin_actions() {
-		if ( ! current_user_can( 'manage_options' ) ) return;
+	public function handle_actions() {
+		if ( ! current_user_can('manage_options') ) return;
 
-		// 1. Handle CSV Upload
-		if ( isset( $_FILES['cobwra_csv_upload'] ) && $_FILES['cobwra_csv_upload']['size'] > 0 ) {
-			check_admin_referer( 'cobwra_admin_action', 'cobwra_nonce' );
+		if ( isset($_POST['save_cobwra_config']) ) {
+			check_admin_referer('cobwra_admin_save');
+			update_option('cobwra_active_comm_count', intval($_POST['active_comm_count']));
+			update_option('cobwra_name_aliases', sanitize_textarea_field($_POST['name_aliases']));
 			
-			$file = $_FILES['cobwra_csv_upload']['tmp_name'];
-			$data = array();
-
-			if ( ( $handle = fopen( $file, "r" ) ) !== FALSE ) {
-				// Map headers: First, Last, Email, Role, Community, Entry ID
-				fgetcsv( $handle ); // Skip header row
-				while ( ( $row = fgetcsv( $handle, 1000, "," ) ) !== FALSE ) {
-					$entry_id = trim( $row[6] );
-					if ( ! empty( $entry_id ) ) {
-						$data[ $entry_id ] = array(
-							'first' => trim( $row[0] ),
-							'last'  => trim( $row[1] ),
-							'email' => trim( $row[2] ),
-							'role'  => trim( $row[3] ),
-							'comm'  => trim( $row[4] )
-						);
+			if (isset($_FILES['rsvp_csv']) && $_FILES['rsvp_csv']['size'] > 0) {
+				$data = [];
+				if (($h = fopen($_FILES['rsvp_csv']['tmp_name'], "r")) !== FALSE) {
+					fgetcsv($h); // Skip Header
+					while (($r = fgetcsv($h, 1000, ",")) !== FALSE) {
+						$data[$r[6]] = ['first'=>$r[0], 'last'=>$r[1], 'email'=>$r[2], 'role'=>$r[3], 'comm'=>$r[4]];
 					}
+					fclose($h);
+					update_option('cobwra_rsvp_lookup_data', $data);
 				}
-				fclose( $handle );
-				update_option( $this->engine->csv_opt, $data );
-				add_settings_error( 'cobwra_msg', 'updated', 'RSVP List Updated Successfully.', 'updated' );
 			}
-		}
-
-		// 2. Handle Settings Save (Community Count)
-		if ( isset( $_POST['save_cobwra_settings'] ) ) {
-			check_admin_referer( 'cobwra_admin_action', 'cobwra_nonce' );
-			update_option( $this->engine->comm_opt, intval( $_POST['active_comm_count'] ) );
-			add_settings_error( 'cobwra_msg', 'settings_updated', 'Configuration Saved.', 'updated' );
-		}
-
-		// 3. Handle Clear Data
-		if ( isset( $_POST['clear_cobwra_data'] ) ) {
-			check_admin_referer( 'cobwra_admin_action', 'cobwra_nonce' );
-			delete_option( $this->engine->csv_opt );
-			add_settings_error( 'cobwra_msg', 'data_cleared', 'RSVP Data Cleared.', 'updated' );
+			add_settings_error('cobwra', 'saved', 'Settings and Data Updated.', 'updated');
 		}
 	}
 
-	/**
-	 * The Primary Settings Page
-	 */
-	public function render_settings_page() {
-		settings_errors( 'cobwra_msg' );
-		$csv_data = get_option( $this->engine->csv_opt, array() );
-		$comm_count = get_option( $this->engine->comm_opt, 0 );
+	public function render_page() {
+		settings_errors('cobwra');
+		$csv_data = get_option('cobwra_rsvp_lookup_data', []);
+		$aliases = get_option('cobwra_name_aliases', '');
 		?>
 		<div class="wrap">
-			<h1>COBWRA Check-in Configuration</h1>
-			
-			<div class="card" style="max-width: 100%; margin-top: 20px; padding: 20px;">
+			<h1>COBWRA Configuration</h1>
+			<div class="card" style="max-width:800px; padding:20px; margin-top:20px;">
 				<form method="POST" enctype="multipart/form-data">
-					<?php wp_nonce_field( 'cobwra_admin_action', 'cobwra_nonce' ); ?>
-					
-					<h3>1. General Configuration</h3>
+					<?php wp_nonce_field('cobwra_admin_save'); ?>
+					<h3>1. Quorum & RSVP</h3>
 					<table class="form-table">
-						<tr>
-							<th scope="row"><label for="active_comm_count">Total Active Communities</label></th>
-							<td>
-								<input name="active_comm_count" type="number" id="active_comm_count" value="<?php echo esc_attr( $comm_count ); ?>" class="small-text">
-								<p class="description">Required for accurate Quorum (40%) calculations.</p>
-							</td>
-						</tr>
+						<tr><th>Active Communities</th><td><input type="number" name="active_comm_count" value="<?php echo get_option('cobwra_active_comm_count'); ?>" class="small-text"></td></tr>
+						<tr><th>Upload RSVP CSV</th><td><input type="file" name="rsvp_csv"></td></tr>
 					</table>
-
 					<hr>
-
-					<h3>2. RSVP Data Management</h3>
-					<p>Upload the latest RSVP CSV export from COBWRA.org to refresh the "Credential Engine."</p>
-					<input type="file" name="cobwra_csv_upload" accept=".csv">
-					
-					<p class="submit">
-						<input type="submit" name="save_cobwra_settings" class="button button-primary" value="Save Settings & Upload CSV">
-						<?php if ( ! empty( $csv_data ) ) : ?>
-							<input type="submit" name="clear_cobwra_data" class="button button-secondary" value="Clear RSVP Data" onclick="return confirm('Are you sure you want to delete all RSVP records?');">
-						<?php endif; ?>
-					</p>
+					<h3>2. Name Aliases (Fuzzy Matching)</h3>
+					<p class="description">One group per line, comma separated. Example: <em>Steve,Steven,Stephen</em></p>
+					<textarea name="name_aliases" rows="6" class="large-text" placeholder="Pat,Patricia,Patty"><?php echo esc_textarea($aliases); ?></textarea>
+					<p class="submit"><input type="submit" name="save_cobwra_config" class="button button-primary" value="Save All Changes"></p>
 				</form>
 			</div>
 
-			<?php if ( ! empty( $csv_data ) ) : ?>
-				<div style="margin-top: 30px;">
-					<h3>Data Preview: Current RSVP List (First 10 Rows)</h3>
-					<table class="wp-list-table widefat fixed striped">
-						<thead>
-							<tr>
-								<th>ID</th>
-								<th>Name</th>
-								<th>Community</th>
-								<th>Claimed Role</th>
-								<th>Email</th>
-							</tr>
-						</thead>
-						<tbody>
-							<?php 
-							$preview = array_slice( $csv_data, 0, 10, true );
-							foreach ( $preview as $id => $row ) {
-								echo "<tr>
-										<td><strong>{$id}</strong></td>
-										<td>{$row['first']} {$row['last']}</td>
-										<td>{$row['comm']}</td>
-										<td>{$row['role']}</td>
-										<td>{$row['email']}</td>
-									  </tr>";
-							}
-							?>
-						</tbody>
-					</table>
-					<p class="description">Total Records Loaded: <?php echo count( $csv_data ); ?></p>
-				</div>
+			<?php if(!empty($csv_data)): ?>
+				<h3>RSVP Preview (Top 10)</h3>
+				<table class="wp-list-table widefat fixed striped">
+					<thead><tr><th>ID</th><th>Name</th><th>Community</th><th>Role</th></tr></thead>
+					<tbody>
+						<?php $p = array_slice($csv_data, 0, 10, true);
+						foreach($p as $id => $r) { echo "<tr><td>$id</td><td>{$r['first']} {$r['last']}</td><td>{$r['comm']}</td><td>{$r['role']}</td></tr>"; } ?>
+					</tbody>
+				</table>
 			<?php endif; ?>
 		</div>
 		<?php
-	}
-
-	/**
-	 * Wraps the Dashboard shortcode for use in the admin menu
-	 */
-	public function render_admin_dashboard() {
-		echo '<div class="wrap">' . do_shortcode('[cobwra_dashboard]') . '</div>';
 	}
 }
